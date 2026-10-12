@@ -1,9 +1,25 @@
-# Render "Blueprint": New > Blueprint > pick the repo that contains this server folder.
+# # Render "Blueprint": New > Blueprint > pick the repo that contains this server folder.
+# services:
+#   - type: web
+#     name: guardianpulse-webhook
+#     runtime: docker
+#     rootDir: server
+#     plan: free
+#     healthCheckPath: /health
+#     envVars:
+#       - key: WEBHOOK_SECRET
+#         generateValue: true
+#       - key: CARETAKER_KEY
+#         generateValue: true
+#       - key: FIREBASE_CREDENTIALS_JSON
+#         sync: false   # paste the whole service-account JSON in the Render dashboard
+# Render "Blueprint": New > Blueprint > pick github.com/Abheeshek-47/Gaurdian-pulse-app.
+# The server files (main.py, Dockerfile) sit at the repo root, so no rootDir is needed.
 services:
   - type: web
     name: guardianpulse-webhook
     runtime: docker
-    rootDir: server
+    dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /health
     envVars:
