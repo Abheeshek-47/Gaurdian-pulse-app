@@ -48,6 +48,7 @@ def test_full_flow():
         alerts = client.get("/alerts", headers=C).json()
         assert len(alerts) == 1 and alerts[0]["status"] == "open"
         assert alerts[0]["motion"]["score"] == 0.68
+        assert alerts[0]["location"] is None
 
         assert client.get("/webhook/alert/evt-1/status", headers=W).json()["status"] == "open"
         acked = client.post("/alerts/evt-1/ack", json={"by": "Priya"}, headers=C).json()
@@ -62,6 +63,24 @@ def test_full_flow():
         # the caretaker app's test button goes through the same path
         assert client.post("/devices/test", json={"by": "Priya"}, headers=C).json()["duplicate"] is False
         assert len(client.get("/alerts", headers=C).json()) == 2
+
+
+def test_live_location():
+    with TestClient(main.app) as client:
+        a = dict(ALERT, event_id="evt-loc", location={"lat": 30.41, "lng": 77.97, "accuracy": 12})
+        client.post("/webhook/alert", json=a, headers=W)
+        loc = client.get("/alerts/evt-loc", headers=C).json()["location"]
+        assert (loc["lat"], loc["lng"], loc["accuracy"]) == (30.41, 77.97, 12)
+
+        # updates while the alert is active: the latest one wins
+        r = client.post("/webhook/alert/evt-loc/location", json={"lat": 30.42, "lng": 77.98}, headers=W)
+        assert r.json() == {"ok": True}
+        loc = client.get("/alerts/evt-loc", headers=C).json()["location"]
+        assert (loc["lat"], loc["lng"]) == (30.42, 77.98)
+
+        assert client.post("/webhook/alert/evt-loc/location", json={"lat": 1, "lng": 2}).status_code == 401
+        assert client.post("/webhook/alert/nope/location", json={"lat": 1, "lng": 2}, headers=W).status_code == 404
+        assert client.post("/webhook/alert/evt-loc/location", json={"lat": 99, "lng": 2}, headers=W).status_code == 422
 
 
 def test_titles():

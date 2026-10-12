@@ -21,6 +21,8 @@ alert = {
     "outcome": "help_requested" if help_requested else "no_response",
     "transcript": "help me" if help_requested else "",
     "motion": {"peak_g": 3.2, "orientation": 0.41, "stillness": 0.83, "score": 0.71},
+    # UPES Bidholi campus, Dehradun: shows up on the caretaker's map
+    "location": {"lat": 30.4159, "lng": 77.9670, "accuracy": 15},
     "occurred_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
 }
 req = urllib.request.Request(

@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS alerts (
     ack_at        TEXT,
     pushed_to     INTEGER NOT NULL DEFAULT 0
 );
+-- Live location trail sent by the wearer phone while an alert is active.
+CREATE TABLE IF NOT EXISTS locations (
+    alert_id      TEXT NOT NULL,
+    lat           REAL NOT NULL,
+    lng           REAL NOT NULL,
+    accuracy      REAL,
+    at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS locations_by_alert ON locations (alert_id, at);
 CREATE TABLE IF NOT EXISTS devices (
     token         TEXT PRIMARY KEY,
     name          TEXT,
@@ -107,8 +116,9 @@ class Motion(BaseModel):
 
 
 class Location(BaseModel):
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    accuracy: Optional[float] = None  # metres, as reported by the phone
 
 
 class AlertIn(BaseModel):
@@ -146,7 +156,23 @@ def caretaker_auth(x_caretaker_key: str = Header(default="")) -> None:
 
 
 # ------------------------------------------------------------------ helpers
-def row_to_alert(r: sqlite3.Row) -> dict:
+def save_location(conn: sqlite3.Connection, alert_id: str, loc: Location) -> None:
+    conn.execute(
+        "INSERT INTO locations (alert_id, lat, lng, accuracy, at) VALUES (?, ?, ?, ?, ?)",
+        (alert_id, loc.lat, loc.lng, loc.accuracy, now_iso()),
+    )
+
+
+def latest_location(conn: sqlite3.Connection, alert_id: str) -> Optional[dict]:
+    r = conn.execute(
+        "SELECT lat, lng, accuracy, at AS updated_at FROM locations"
+        " WHERE alert_id = ? ORDER BY rowid DESC LIMIT 1",
+        (alert_id,),
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def row_to_alert(r: sqlite3.Row, conn: sqlite3.Connection) -> dict:
     out = json.loads(r["payload"])
     out.update(
         id=r["id"],
@@ -155,6 +181,7 @@ def row_to_alert(r: sqlite3.Row) -> dict:
         ack_by=r["ack_by"],
         ack_at=r["ack_at"],
         pushed_to=r["pushed_to"],
+        location=latest_location(conn, r["id"]),
     )
     return out
 
@@ -194,6 +221,8 @@ def send_push(alert_id: str, a: AlertIn) -> int:
         "wearer_phone": a.wearer_phone or "",
         "outcome": a.outcome,
         "reason": a.reason,
+        "lat": "" if a.location is None else str(a.location.lat),
+        "lng": "" if a.location is None else str(a.location.lng),
     }
     msg = _messaging.MulticastMessage(
         tokens=tokens,
@@ -256,6 +285,8 @@ def store_and_push(a: AlertIn) -> dict:
                 a.model_dump_json(),
             ),
         )
+        if a.location is not None:
+            save_location(conn, a.event_id, a.location)
     log.info("Alert %s from %s: %s / %s", a.event_id, a.wearer_name, a.reason, a.outcome)
 
     pushed = send_push(a.event_id, a)
@@ -274,6 +305,16 @@ def alert_status(alert_id: str) -> dict:
     if not r:
         raise HTTPException(status_code=404, detail="unknown alert")
     return dict(r)
+
+
+@app.post("/webhook/alert/{alert_id}/location", dependencies=[Depends(wearer_auth)])
+def update_location(alert_id: str, loc: Location) -> dict:
+    """Live location updates from the wearer phone while the alert is active."""
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM alerts WHERE id = ?", (alert_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="unknown alert")
+        save_location(conn, alert_id, loc)
+    return {"ok": True}
 
 
 # ---- called by the caretaker app
@@ -304,16 +345,16 @@ def list_alerts(limit: int = 50) -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM alerts ORDER BY received_at DESC LIMIT ?", (min(limit, 200),)
         ).fetchall()
-    return [row_to_alert(r) for r in rows]
+        return [row_to_alert(r, conn) for r in rows]
 
 
 @app.get("/alerts/{alert_id}", dependencies=[Depends(caretaker_auth)])
 def get_alert(alert_id: str) -> dict:
     with db() as conn:
         r = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
-    if not r:
-        raise HTTPException(status_code=404, detail="unknown alert")
-    return row_to_alert(r)
+        if not r:
+            raise HTTPException(status_code=404, detail="unknown alert")
+        return row_to_alert(r, conn)
 
 
 @app.post("/alerts/{alert_id}/ack", dependencies=[Depends(caretaker_auth)])
@@ -328,5 +369,5 @@ def ack_alert(alert_id: str, body: AckIn) -> dict:
                 (body.by, now_iso(), alert_id),
             )
         r = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
-    log.info("Alert %s acknowledged by %s", alert_id, r["ack_by"])
-    return row_to_alert(r)
+        log.info("Alert %s acknowledged by %s", alert_id, r["ack_by"])
+        return row_to_alert(r, conn)
