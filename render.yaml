@@ -1,0 +1,15 @@
+# Render "Blueprint": New > Blueprint > pick the repo that contains this server folder.
+services:
+  - type: web
+    name: guardianpulse-webhook
+    runtime: docker
+    rootDir: server
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: CARETAKER_KEY
+        generateValue: true
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false   # paste the whole service-account JSON in the Render dashboard
